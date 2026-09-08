@@ -146,6 +146,45 @@ html_context = {
 }
 html_favicon = "logo/favicon.ico"
 
+# Build the fact sheet as a standalone PDF in addition to the HTML page.
+latex_documents = [
+    (
+        "fact-sheet",
+        "reach-fact-sheet.tex",
+        "REACH Fact Sheet",
+        author,
+        "howto",
+    ),
+]
+latex_elements = {
+    "preamble": r"""
+\usepackage{xcolor}
+\definecolor{reachblue}{HTML}{005A9C}
+\definecolor{reachrule}{HTML}{B8CEDC}
+\geometry{hmargin=0.7in,vmargin=0.7in}
+\renewcommand{\familydefault}{\sfdefault}
+\pagecolor{white}
+\color{black}
+\hypersetup{colorlinks=true,linkcolor=reachblue,urlcolor=reachblue}
+\csname titleformat\endcsname{\section}[block]
+    {\large\bfseries\color{reachblue}}{}{0pt}{}
+\csname titlespacing\endcsname*{\section}{0pt}{1.2ex plus .2ex minus .2ex}{.5ex}
+""",
+    "maketitle": r"""
+\csname twocolumn\endcsname[
+\begin{center}
+{\LARGE\bfseries REACH Fact Sheet}\par
+\vspace{0.3em}
+{\large Global radiation-environment measurements from the REACH constellation}\par
+\vspace{0.7em}
+\color{reachblue}\rule{\textwidth}{0.8pt}
+\end{center}
+\vspace{0.8em}
+]
+""",
+    "tableofcontents": "",
+}
+
 # Render inheritance diagrams in SVG
 graphviz_output_format = "svg"
 

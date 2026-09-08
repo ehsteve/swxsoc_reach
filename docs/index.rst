@@ -7,6 +7,7 @@ A Python package to process and analyze data from the REACH dosimeters.
    :maxdepth: 100
    :caption: Table of Contents:
 
+   fact-sheet
    about
    user-guide/index
    dev-guide/index
