@@ -69,23 +69,42 @@ What It Does
 Where to Get Data
 =================
 
-Public REACH Level 1C data are available from the
-`NASA SPDF REACH archive <https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/>`_.
+The recommended way to download REACH data is via the **SPDF REACH Client**
+(Fido integration), which provides processed Level 1C CDF data without requiring
+credentials. New data are published daily to
+`NASA SPDF REACH Archive <https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/>`_
+with an approximate two-day latency.
 
-REACH archive: https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/
-
-New data are published daily with an approximate two-day latency. For
-authorized historical retrieval from the Unified Data Library (UDL), use the
-:ref:`historical-download` command-line workflow. UDL downloads require a
-``BASICAUTH`` credential or an AWS Secrets Manager configuration.
+For authorized historical retrieval of raw telemetry from the Unified Data
+Library (UDL), see the :ref:`historical-download` command-line workflow.
+Note that UDL downloads provide unprocessed data and require a ``BASICAUTH``
+credential or AWS Secrets Manager configuration.
 
 Typical Workflow
 ================
 
-#. Obtain REACH data from NASA SPDF or the authorized UDL service.
+#. Download REACH Level 1C data using the SPDF REACH Client (no credentials required).
 #. Load and validate the data with ``swxsoc_reach``.
 #. Apply the appropriate calibration and transformations.
 #. Analyze, visualize, or export the resulting measurements.
+
+Downloading Data
+================
+
+Download the last few days of REACH data using the SPDF REACH Client:
+
+.. code-block:: python
+
+  from sunpy.net import Fido, attrs as a
+  from swxsoc_reach.net import REACHClient, DataType, Vehicle
+
+  results = Fido.search(
+    a.Time("2025-05-01", "2025-05-05")
+    & a.Source.reach
+    & a.Instrument.dosimeter
+    & Vehicle.all_satellites
+  )
+  files = Fido.fetch(results, path="./reach_data/")
 
 Open a File and Generate a Map
 ==============================
@@ -105,5 +124,7 @@ Links
 * Source repository: https://github.com/swxsoc/swxsoc_reach/
 * Documentation: https://swxsoc-reach.readthedocs.io/en/latest/
 * User guide: https://swxsoc-reach.readthedocs.io/en/latest/user-guide/overview.html
-* Historical UDL download guide:
+* SPDF REACH Client (Fido):
+  https://swxsoc-reach.readthedocs.io/en/latest/user-guide/retrieving_data.html
+* Historical UDL Download CLI:
   https://swxsoc-reach.readthedocs.io/en/latest/user-guide/historical-download.html
