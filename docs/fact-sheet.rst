@@ -75,6 +75,8 @@ credentials. New data are published daily to
 `NASA SPDF REACH Archive <https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/>`_
 with an approximate two-day latency.
 
+NASA SPDF REACH Archive: https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/
+
 For authorized historical retrieval of raw telemetry from the Unified Data
 Library (UDL), see the :ref:`historical-download` command-line workflow.
 Note that UDL downloads provide unprocessed data and require a ``BASICAUTH``
