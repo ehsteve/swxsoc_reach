@@ -171,7 +171,6 @@ latex_elements = {
 \csname titlespacing\endcsname*{\section}{0pt}{1.2ex plus .2ex minus .2ex}{.5ex}
 """,
     "maketitle": r"""
-\csname twocolumn\endcsname[
 \begin{center}
 {\LARGE\bfseries REACH Fact Sheet}\par
 \vspace{0.3em}
@@ -180,7 +179,6 @@ latex_elements = {
 \color{reachblue}\rule{\textwidth}{0.8pt}
 \end{center}
 \vspace{0.8em}
-]
 """,
     "tableofcontents": "",
 }
