@@ -6,6 +6,8 @@ build sparse time-aligned arrays, and assemble an SWXData object
 ready for CDF output.
 """
 
+import re
+
 import astropy.units as u
 import numpy as np
 import pandas as pd
@@ -15,6 +17,11 @@ from astropy.timeseries import TimeSeries
 from swxsoc.swxdata import SWXData
 
 from swxsoc_reach import log
+from swxsoc_reach.util.enums import (
+    Flavor,
+    SensorId,
+    load_reach_id_dosimeter_relationship,
+)
 from swxsoc_reach.util.schema import REACHDataSchema
 from swxsoc_reach.util.util import get_reachid_lut
 
@@ -94,51 +101,36 @@ def impute_sensor_metadata(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def extract_sensor_metadata(
-    data: pd.DataFrame,
-) -> tuple[list[str], list[str], list[list[str | None]]]:
+def extract_sensor_metadata() -> tuple[list[str], list[list[str | None]]]:
     """
-    Extract sorted sensor IDs, observatory names, and per-sensor flavors.
-
-    Parameters
-    ----------
-    data : pd.DataFrame
-        Deduplicated DataFrame.
+    Extract canonical sensor IDs and per-sensor dosimeter flavor slots.
 
     Returns
     -------
     sensor_ids : list[str]
-        Sorted list of unique sensor IDs.
-    obs_names : list[str]
-        Sorted list of unique observatory names.
+        Canonical list of all REACH sensor IDs in ``SensorId.to_index()`` order.
     observation_flavors : list[list[str | None]]
         For each sensor (matching ``sensor_ids`` order), a list of the
-        sorted unique dosimeter flavor strings (``obDescription``),
-        padded with ``""`` so that every inner list has the same length
-        (equal to the maximum number of flavors across all sensors).
+        canonical dosimeter flavor strings in fixed slot order, padded to
+        exactly two slots per sensor.
     """
-    sensor_ids = sorted([str(s) for s in data["idSensor"].unique()])
-    obs_names = sorted([str(n) for n in data["observatoryName"].unique()])
+    sensor_ids = [str(sensor) for sensor in SensorId if sensor is not SensorId.ALL]
+    relationship = load_reach_id_dosimeter_relationship()
 
-    # Get sorted unique flavors per sensor, ordered by sensor_ids
-    flavors_per_sensor = data.groupby("idSensor")["obDescription"].apply(
-        lambda x: sorted(x.unique().astype(str).tolist())
-    )
-    observation_flavors = flavors_per_sensor.reindex(sensor_ids).tolist()
-
-    # Pad to rectangular shape so np.array() succeeds
-    max_flavors = max(len(f) for f in observation_flavors)
-    observation_flavors = [
-        f + [""] * (max_flavors - len(f)) for f in observation_flavors
-    ]
+    observation_flavors = []
+    for sensor_id in sensor_ids:
+        sensor_enum = SensorId.from_str(sensor_id)
+        flavors = relationship.get(sensor_enum, ())
+        labels = [f"Flavor {flavor.name}" for flavor in flavors[:2]]
+        labels.extend([""] * (2 - len(labels)))
+        observation_flavors.append(labels)
 
     log.info(
-        "Found %d sensors, %d observatories, flavors per sensor: %s",
+        "Found %d sensors, flavors per sensor: %s",
         len(sensor_ids),
-        len(obs_names),
         [len(f) for f in observation_flavors],
     )
-    return sensor_ids, obs_names, observation_flavors
+    return sensor_ids, observation_flavors
 
 
 def create_observation_array(
@@ -165,53 +157,63 @@ def create_observation_array(
         Sorted, UTC-localized DatetimeIndex of unique observation times.
     observation_flavors : list[list[str]]
         For each sensor (matching ``sensor_ids`` order), a list of the
-        sorted unique dosimeter flavor strings (``obDescription``),
-        padded with ``""`` so that every inner list has the same length
-        (equal to the maximum number of flavors across all sensors).
+        canonical dosimeter flavor strings in fixed slot order, padded to
+        exactly two slots per sensor.
 
     Returns
     -------
     np.ndarray
-        3-D float array of shape ``(n_times, n_sensors, n_flavors_max)`` with
-        NaN for missing values, where ``n_flavors_max`` is the maximum number
-        of dosimeter flavors across all sensors and the last dimension indexes
-        those flavors for each sensor.
+        3-D float array of shape ``(n_times, n_sensors, 2)`` with NaN for
+        missing values.
     """
-    # Pre-convert obTime to datetime once for the entire DataFrame
-    dt_index = pd.to_datetime(data["obTime"].astype(str))
+    n_times = len(times_pd)
+    n_sensors = len(sensor_ids)
+    n_flavors = len(observation_flavors[0])
 
-    # Group by (idSensor, obDescription) once
-    grouped = data.groupby(["idSensor", "obDescription"])
+    dose_rate = np.full((n_times, n_sensors, n_flavors), np.nan, dtype=float)
 
-    sensor_dfs = []
+    sensor_to_index = {sensor: idx for idx, sensor in enumerate(sensor_ids)}
+    slot_lookup: dict[str, dict[Flavor, int]] = {}
     for sensor_idx, sensor in enumerate(sensor_ids):
-        series_list = []
-        n_flavors = len(observation_flavors[sensor_idx])
+        flavor_slots: dict[Flavor, int] = {}
+        for slot_idx, flavor_label in enumerate(observation_flavors[sensor_idx]):
+            if not flavor_label:
+                continue
+            flavor_slots[Flavor.from_str(flavor_label)] = slot_idx
+        slot_lookup[sensor] = flavor_slots
 
-        for flavor_idx in range(n_flavors):
-            expected_flavor = observation_flavors[sensor_idx][flavor_idx]
-            key = (sensor, expected_flavor)
+    time_lookup = pd.Series(np.arange(n_times), index=times_pd)
+    row_times = pd.to_datetime(data["obTime"].astype(str), utc=True)
+    row_time_indices = time_lookup.reindex(row_times).to_numpy()
 
-            if key in grouped.groups:
-                group = grouped.get_group(key)
-                s = pd.Series(
-                    pd.to_numeric(group["obValue"], errors="coerce").values,
-                    index=dt_index[group.index],
-                    name=f"flavor_{flavor_idx}",
-                )
-            else:
-                s = pd.Series(
-                    dtype=float,
-                    index=pd.DatetimeIndex([]).tz_localize("UTC"),
-                    name=f"flavor_{flavor_idx}",
-                )
-            series_list.append(s)
+    row_sensors = data["idSensor"].astype(str).to_numpy()
+    row_descriptions = data["obDescription"].astype(str).to_numpy()
+    row_values = pd.to_numeric(data["obValue"], errors="coerce").to_numpy()
 
-        df = pd.concat(series_list, axis=1)
-        df = df.reindex(times_pd)
-        sensor_dfs.append(df.values)
+    for i, sensor in enumerate(row_sensors):
+        if pd.isna(row_time_indices[i]):
+            continue
+        sensor_idx = sensor_to_index.get(sensor)
+        if sensor_idx is None:
+            continue
 
-    return np.stack(sensor_dfs, axis=1).astype(float)
+        match = re.search(
+            r"\bflavor\s+([A-Za-z])\b", row_descriptions[i], flags=re.IGNORECASE
+        )
+        flavor_token = match.group(1) if match else row_descriptions[i]
+
+        try:
+            flavor = Flavor.from_str(flavor_token)
+        except ValueError:
+            continue
+
+        slot_idx = slot_lookup[sensor].get(flavor)
+        if slot_idx is None:
+            continue
+
+        dose_rate[int(row_time_indices[i]), sensor_idx, slot_idx] = row_values[i]
+
+    return dose_rate
 
 
 def create_sensor_array(
@@ -259,7 +261,11 @@ def create_sensor_array(
                 name=sensor,
             )
         else:
-            s = pd.Series(dtype=float, index=pd.DatetimeIndex([]), name=sensor)
+            s = pd.Series(
+                dtype=float,
+                index=pd.DatetimeIndex([]).tz_localize("UTC"),
+                name=sensor,
+            )
         sensor_dfs.append(s)
 
     df = pd.concat(sensor_dfs, axis=1)
@@ -280,7 +286,8 @@ def build_swxdata(
     the following pipeline in order:
 
     1. **Deduplicate** records via :func:`deduplicate_records`.
-    2. **Extract sensor metadata** (sensor IDs, observatory names, flavors)
+    2. **Extract canonical sensor metadata** (all sensor IDs and fixed
+       two-slot dosimeter flavor layout)
        via :func:`extract_sensor_metadata`.
     3. **Build common time axis** from the unique UTC observation timestamps,
        stripping any trailing ``Z`` before parsing to avoid a stack overflow
@@ -301,19 +308,19 @@ def build_swxdata(
     Variable                     Shape
     ===========================  ==========================================
     ``Epoch``                    ``(n_times,)``
-    ``sensor_labels``            ``(n_sensors,)``
-    ``sensor_ids``               ``(n_sensors,)``
-    ``dosimeter_flavor_labels``  ``(n_flavors_max,)``
-    ``dosimeter_flavor_ids``     ``(n_flavors_max,)``
-    ``dosimeter_flavors``        ``(n_sensors, n_flavors_max)``
-    ``dose_rate``                ``(n_times, n_sensors, n_flavors_max)``
-    ``lat``                      ``(n_times, n_sensors)``
-    ``lon``                      ``(n_times, n_sensors)``
-    ``alt``                      ``(n_times, n_sensors)``
-    ``obQuality``                ``(n_times, n_sensors)``
-    ``sensor_position_x``        ``(n_times, n_sensors)``
-    ``sensor_position_y``        ``(n_times, n_sensors)``
-    ``sensor_position_z``        ``(n_times, n_sensors)``
+    ``sensor_labels``            ``(32,)``
+    ``sensor_ids``               ``(32,)``
+    ``dosimeter_flavor_labels``  ``(2,)``
+    ``dosimeter_flavor_ids``     ``(2,)``
+    ``dosimeter_flavors``        ``(32, 2)``
+    ``dose_rate``                ``(n_times, 32, 2)``
+    ``lat``                      ``(n_times, 32)``
+    ``lon``                      ``(n_times, 32)``
+    ``alt``                      ``(n_times, 32)``
+    ``obQuality``                ``(n_times, 32)``
+    ``sensor_position_x``        ``(n_times, 32)``
+    ``sensor_position_y``        ``(n_times, 32)``
+    ``sensor_position_z``        ``(n_times, 32)``
     ===========================  ==========================================
 
     Parameters
@@ -343,7 +350,7 @@ def build_swxdata(
     data = deduplicate_records(data)
 
     # --- 2. Sensor metadata --------------------------------------------
-    sensor_labels, _obs_names, observation_flavors = extract_sensor_metadata(data)
+    sensor_labels, observation_flavors = extract_sensor_metadata()
 
     # Convert Sensor Labels to pure numeric IDs if they follow the "REACH-XXX" pattern
     sensor_ids = np.asanyarray(
@@ -367,7 +374,7 @@ def build_swxdata(
 
     # --- 4. Pre-compute per-sensor groupby for scalar columns ----------
     sensor_deduped = data.drop_duplicates(subset=["idSensor", "obTime"], keep="first")
-    sensor_deduped_dt = pd.to_datetime(sensor_deduped["obTime"].astype(str))
+    sensor_deduped_dt = pd.to_datetime(sensor_deduped["obTime"].astype(str), utc=True)
     sensor_grouped = sensor_deduped.groupby("idSensor")
 
     # --- 5. Build variable dict ----------------------------------------
@@ -383,7 +390,7 @@ def build_swxdata(
         "dosimeter_flavor_labels": NDData(
             data=np.array(
                 [f"flavor_{i}" for i in range(len(observation_flavors[0]))]
-            ),  # Assuming all sensors have the same max flavor count due to padding
+            ),  # Canonical two-slot flavor axis shared across all sensors
             meta={
                 "CATDESC": "Label for dosimeter flavors dimension",
                 "VAR_TYPE": "metadata",
@@ -393,7 +400,7 @@ def build_swxdata(
         "dosimeter_flavor_ids": NDData(
             data=np.array(
                 [i for i in range(len(observation_flavors[0]))], dtype=np.int32
-            ),  # Assuming all sensors have the same max flavor count due to padding
+            ),  # Canonical two-slot flavor axis shared across all sensors
             meta={
                 "CATDESC": "ID for dosimeter flavors dimension",
                 "VAR_TYPE": "metadata",
