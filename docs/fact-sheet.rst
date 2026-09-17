@@ -1,8 +1,8 @@
-================
-REACH Fact Sheet
-================
+==========================
+Aerospace REACH Fact Sheet
+==========================
 
-The Responsive Environmental Assessment Commercially Hosted (REACH)
+The Aerospace Responsive Environmental Assessment Commercially Hosted (REACH)
 dosimeter network provides global, low-latency monitoring of space weather
 hazards. The ``swxsoc_reach`` Python package gets, processes, and analyzes
 REACH data.
@@ -21,9 +21,11 @@ Mission Context
 ===============
 
 REACH is an Air Force-led demonstration of radiation-sensing payloads across
-six Iridium NEXT orbital planes. The network helps characterize radiation
+six Iridium NEXT orbital planes on 32 spacecraft. Each spacecraft carries two REACH dosimeters
+built and managed by the Aerospace Corporation.
+The goal of the network is to help characterize radiation
 environments that can contribute to spacecraft anomalies and separates natural
-space weather effects from other disturbances.
+space weather effects from other disturbances. 
 
 Dosimeter Flavors
 =================
@@ -36,24 +38,24 @@ Each REACH spacecraft carries two channels selected from six flavors.
 
    * - Flavor
      - Energy threshold
-     - Sensors
+     - Number of Sensors in Constellation
    * - U
-     - >= 5.0 MeV electrons; >= 57 MeV protons
+     - >= 2.15 MeV electrons; >= 51.5 MeV protons
      - 5
    * - V
-     - >= 3.4 MeV electrons; >= 47 MeV protons
+     - >= 2.20 MeV electrons; >= 43.9 MeV protons
      - 7
    * - W
-     - >= 12 MeV protons
+     - >=1.43 MeV electrons, >= 10.5 MeV protons
      - 14
    * - X
-     - >= 360 keV electrons; >= 12 MeV protons
+     - >= 0.798 keV electrons; >= 12.1 MeV protons
      - 20
    * - Y
-     - >= 1.6 MeV electrons; >= 31 MeV protons
+     - >= 2.47 MeV electrons; >= 30.3 MeV protons
      - 12
    * - Z
-     - >= 50 keV electrons; >= 200 keV protons
+     - >= 91.6 keV electrons; >= 1.29 MeV protons
      - 6
 
 What It Does
@@ -69,26 +71,13 @@ What It Does
 Where to Get Data
 =================
 
-The recommended way to download REACH data is via the **SPDF REACH Client**
+New data are published daily to NASA SPDF REACH Archive which can be found at 
+`https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/ <https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/>`_
+The data are made available with an approximate two-day latency.
+To programmatically search for and download REACH data use the **SPDF REACH Client**
 (Fido integration), which provides processed Level 1C CDF data without requiring
-credentials. New data are published daily to
-`NASA SPDF REACH Archive <https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/>`_
-with an approximate two-day latency.
-
-NASA SPDF REACH Archive: https://spdf.gsfc.nasa.gov/pub/data/reach/dosimeter/l1c/all_satellites/prelim/
-
-For authorized historical retrieval of raw telemetry from the Unified Data
-Library (UDL), see the :ref:`historical-download` command-line workflow.
-Note that UDL downloads provide unprocessed data and require a ``BASICAUTH``
-credential or AWS Secrets Manager configuration.
-
-Typical Workflow
-================
-
-#. Download REACH Level 1C data using the SPDF REACH Client (no credentials required).
-#. Load and validate the data with ``swxsoc_reach``.
-#. Apply the appropriate calibration and transformations.
-#. Analyze, visualize, or export the resulting measurements.
+credentials (see below).
+Historical data can be found at `Zenodo REACH Historical Data <https://zenodo.org/records/7038285>`_.
 
 Downloading Data
 ================
@@ -124,9 +113,6 @@ Links
 =====
 
 * Source repository: https://github.com/swxsoc/swxsoc_reach/
-* Documentation: https://swxsoc-reach.readthedocs.io/en/latest/
-* User guide: https://swxsoc-reach.readthedocs.io/en/latest/user-guide/overview.html
-* SPDF REACH Client (Fido):
-  https://swxsoc-reach.readthedocs.io/en/latest/user-guide/retrieving_data.html
-* Historical UDL Download CLI:
-  https://swxsoc-reach.readthedocs.io/en/latest/user-guide/historical-download.html
+* Software Documentation: https://swxsoc-reach.readthedocs.io/en/latest/
+* REACH Historical Data and Reference Documentation: https://zenodo.org/records/7038285 (DOI 10.5281/zenodo.5988170)
+* REACH Constellation Info: https://zenodo.org/records/7038285?preview_file=TOR-2019-02650.pdf
