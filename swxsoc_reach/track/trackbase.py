@@ -9,8 +9,10 @@ import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
 import numpy as np
 from astropy.nddata import NDData
+from astropy.table import vstack
 from astropy.time import Time
 from astropy.timeseries import TimeSeries
+from ndcube import NDCollection, NDCube
 from scipy.stats import binned_statistic_2d
 from swxsoc.io.cdf_handler import CDFHandler
 from swxsoc.swxdata import SWXData
@@ -44,6 +46,85 @@ class REACHTrack(SWXData):
     This is a container for REACH track data, which consists of time series of observations from multiple sensors as a function of time, longitude, and latitude.
     It provides methods for extracting individual tracks, plotting the track parameters as a function of time, plotting the track on a global geomap, and converting the track to a gridded geospatial map.
     """
+
+    def __add__(self, other: "REACHTrack") -> "REACHTrack":
+        """Concatenate two tracks along their observation-time axis.
+
+        The tracks must have matching support and spectra variables and
+        non-time dimensions. Neither input track is modified.
+        """
+        if not isinstance(other, REACHTrack):
+            return NotImplemented
+
+        if self.data["support"].keys() != other.data["support"].keys():
+            raise ValueError("Tracks must have matching support variables.")
+        if self.data["spectra"].keys() != other.data["spectra"].keys():
+            raise ValueError("Tracks must have matching spectra variables.")
+
+        timeseries = self._timeseries[self._default_timeseries_key].copy()
+        other_timeseries = other._timeseries[other._default_timeseries_key]
+        timeseries = vstack([timeseries, other_timeseries])
+        _, unique_indices = np.unique(timeseries["time"].jd, return_index=True)
+        unique_indices = np.sort(unique_indices)
+        duplicate_count = len(timeseries) - len(unique_indices)
+        if duplicate_count:
+            log.warning("Discarded %d duplicate time-series row(s).", duplicate_count)
+        timeseries = timeseries[unique_indices]
+
+        support = {}
+        for key, data in self.data["support"].items():
+            other_data = other.data["support"][key]
+            if data.data.shape[1:] != other_data.data.shape[1:]:
+                raise ValueError(
+                    f"Support variable {key!r} has incompatible dimensions."
+                )
+            if data.data.shape[0] == len(self.time) and other_data.data.shape[0] == len(
+                other.time
+            ):
+                support_data = np.concatenate((data.data, other_data.data), axis=0)[
+                    unique_indices
+                ]
+            else:
+                if data.data.shape != other_data.data.shape or not np.array_equal(
+                    data.data,
+                    other_data.data,
+                    equal_nan=np.issubdtype(data.data.dtype, np.inexact),
+                ):
+                    raise ValueError(f"Static support variable {key!r} does not match.")
+                support_data = data.data.copy()
+            support[key] = NDData(
+                data=support_data,
+                meta=deepcopy(data.meta),
+            )
+
+        spectra = {}
+        for key, data in self.data["spectra"].items():
+            other_data = other.data["spectra"][key]
+            if data.data.shape[1:] != other_data.data.shape[1:]:
+                raise ValueError(
+                    f"Spectra variable {key!r} has incompatible dimensions."
+                )
+            if data.data.shape[0] != len(self.time) or other_data.data.shape[0] != len(
+                other.time
+            ):
+                raise ValueError(f"Spectra variable {key!r} is not time-indexed.")
+            spectra[key] = NDCube(
+                data=np.concatenate((data.data, other_data.data), axis=0)[
+                    unique_indices
+                ],
+                wcs=deepcopy(data.wcs),
+                meta=deepcopy(data.meta),
+            )
+
+        spectra_collection = NDCollection(list(spectra.items())) if spectra else None
+
+        return REACHTrack(
+            timeseries=timeseries,
+            support=support,
+            spectra=spectra_collection,
+            meta=deepcopy(self.meta),
+            schema=self.schema,
+        )
 
     def get_track(self, reach_id: SensorId | int) -> TimeSeries:
         """

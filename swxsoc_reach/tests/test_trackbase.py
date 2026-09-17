@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -5,7 +7,7 @@ import pytest
 from astropy.timeseries import TimeSeries
 from cartopy.mpl.geoaxes import GeoAxes
 
-from swxsoc_reach import _test_file_track
+from swxsoc_reach import _test_file_track, log
 from swxsoc_reach.geomap import GenericGeoMap
 from swxsoc_reach.track.trackbase import REACHTrack
 from swxsoc_reach.util.enums import Flavor, SensorId
@@ -43,6 +45,66 @@ def test_truncate_does_not_modify_original(reach_track_swx):
     end = reach_track_swx.time[-1]
     truncated_track = reach_track_swx.truncate(start, end)
     assert len(truncated_track.time) == original_len
+
+
+def test_add_concatenates_tracks_without_modifying_inputs(
+    truncated_reach_track_swx, monkeypatch
+):
+    original_len = len(truncated_reach_track_swx.time)
+    warning = Mock()
+    monkeypatch.setattr(log, "warning", warning)
+
+    combined_track = truncated_reach_track_swx + truncated_reach_track_swx
+
+    warning.assert_called_once_with("Discarded %d duplicate time-series row(s).", 10)
+    assert isinstance(combined_track, REACHTrack)
+    assert len(combined_track.time) == original_len
+    assert len(truncated_reach_track_swx.time) == original_len
+    for key, data in truncated_reach_track_swx.data["support"].items():
+        combined_data = combined_track.data["support"][key].data
+        if data.data.shape[0] == original_len:
+            assert combined_data.shape[0] == original_len
+        else:
+            assert np.array_equal(
+                combined_data,
+                data.data,
+                equal_nan=np.issubdtype(data.data.dtype, np.inexact),
+            )
+
+
+def test_add_reconstructs_track_from_two_halves(reach_track_swx):
+    midpoint = len(reach_track_swx.time) // 2
+    first_half = reach_track_swx.truncate(
+        reach_track_swx.time[0], reach_track_swx.time[midpoint - 1]
+    )
+    second_half = reach_track_swx.truncate(
+        reach_track_swx.time[midpoint], reach_track_swx.time[-1]
+    )
+
+    reconstructed_track = first_half + second_half
+
+    assert np.all(reconstructed_track.time == reach_track_swx.time)
+    for key, data in reach_track_swx.data["support"].items():
+        reconstructed_data = reconstructed_track.data["support"][key].data
+        assert np.array_equal(
+            reconstructed_data,
+            data.data,
+            equal_nan=np.issubdtype(data.data.dtype, np.inexact),
+        )
+
+
+def test_add_preserves_deduplicated_spectra(reach_track_swx):
+    combined_track = reach_track_swx + reach_track_swx
+
+    assert set(combined_track.data["spectra"]) == set(reach_track_swx.data["spectra"])
+    for key, data in reach_track_swx.data["spectra"].items():
+        combined_data = combined_track.data["spectra"][key].data
+        assert combined_data.shape == data.data.shape
+        assert np.array_equal(
+            combined_data,
+            data.data,
+            equal_nan=np.issubdtype(data.data.dtype, np.inexact),
+        )
 
 
 def test_truncate_slices_support_variables(truncated_reach_track_swx):
