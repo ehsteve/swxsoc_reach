@@ -1,5 +1,6 @@
 from unittest.mock import Mock
 
+import astropy.units as u
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import numpy as np
@@ -45,6 +46,63 @@ def test_truncate_does_not_modify_original(reach_track_swx):
     end = reach_track_swx.time[-1]
     truncated_track = reach_track_swx.truncate(start, end)
     assert len(truncated_track.time) == original_len
+
+
+def test_to_tracks_filters_all_sensors_by_flavor(reach_track_swx):
+    tracks = reach_track_swx.to_tracks(Flavor.X)
+    flavor_grid = np.vectorize(Flavor.from_str)(
+        reach_track_swx["dosimeter_flavors"].data
+    )
+    sensor_indices, dosimeter_indices = np.nonzero(flavor_grid == Flavor.X)
+
+    expected_measurements = len(reach_track_swx.time) * len(sensor_indices)
+    assert len(tracks.time) == expected_measurements
+    assert tracks["dose_rate"].shape == (expected_measurements,)
+    assert (
+        tracks["sensor_id"].tolist()
+        == np.tile(
+            reach_track_swx["sensor_ids"].data[sensor_indices],
+            len(reach_track_swx.time),
+        ).tolist()
+    )
+    assert (
+        tracks["flavor"].tolist()
+        == np.tile(
+            [
+                selected_flavor.name
+                for selected_flavor in flavor_grid[sensor_indices, dosimeter_indices]
+            ],
+            len(reach_track_swx.time),
+        ).tolist()
+    )
+    assert "region_code" in tracks.colnames
+
+
+def test_to_region_indices_aggregates_each_region(reach_track_swx):
+    tracks = reach_track_swx.to_tracks(Flavor.X)
+    aggregated = reach_track_swx.to_region_indices(
+        Flavor.X,
+        integration_time=10 * u.s,
+        statistic="count",
+    )
+    region_codes = np.asarray(tracks["region_code"], dtype=float)
+    expected_codes = np.unique(region_codes[np.isfinite(region_codes)]).astype(int)
+
+    assert aggregated.meta["statistic"] == "count"
+    assert aggregated.meta["integration_time"] == "10.0 s"
+    assert set(aggregated.colnames) == {
+        "time",
+        *[f"region_code_{code}" for code in expected_codes],
+    }
+    assert all(
+        aggregated[f"region_code_{code}"].unit == u.count for code in expected_codes
+    )
+    dose_rates = tracks["dose_rate"].to_value(u.rad / u.s)
+    for code in expected_codes:
+        expected_count = np.count_nonzero(
+            (region_codes == code) & np.isfinite(dose_rates)
+        )
+        assert aggregated[f"region_code_{code}"].sum().value == expected_count
 
 
 def test_add_concatenates_tracks_without_modifying_inputs(

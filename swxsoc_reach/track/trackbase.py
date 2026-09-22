@@ -126,6 +126,150 @@ class REACHTrack(SWXData):
             schema=self.schema,
         )
 
+    def to_tracks(self, flavor: Flavor) -> TimeSeries:
+        """
+        Return region-coded observations for all dosimeters of a flavor.
+
+        Each selected measurement becomes one row in the returned time series.
+        A dosimeter is selected when its static ``dosimeter_flavors`` entry
+        matches ``flavor``.
+
+        Returns
+        -------
+        TimeSeries
+            A time series containing the sensor ID, flavor, dose rate,
+            coordinates, and region code for every selected measurement.
+
+        Raises
+        ------
+        ValueError
+            If no dosimeters match ``flavor``.
+        """
+        if not isinstance(flavor, Flavor):
+            raise TypeError("flavor must be a Flavor enum member.")
+
+        flavor_grid = np.vectorize(Flavor.from_str)(self["dosimeter_flavors"].data)
+        flavor_mask = (
+            np.ones(flavor_grid.shape, dtype=bool)
+            if flavor == Flavor.ALL
+            else flavor_grid == flavor
+        )
+        sensor_indices, dosimeter_indices = np.nonzero(flavor_mask)
+        if sensor_indices.size == 0:
+            raise ValueError(f"No dosimeters match flavor {flavor.name}.")
+
+        n_measurements = sensor_indices.size
+        ts_times = np.repeat(Time(self["time"]), n_measurements)
+        ts = TimeSeries(time=ts_times)
+        ts["sensor_id"] = np.tile(
+            self["sensor_ids"].data[sensor_indices], len(self.time)
+        )
+        selected_flavors = np.asarray(
+            [
+                selected_flavor.name
+                for selected_flavor in flavor_grid[sensor_indices, dosimeter_indices]
+            ],
+            dtype="U1",
+        )
+        ts["flavor"] = np.tile(selected_flavors, len(self.time))
+        ts["dose_rate"] = (
+            self["dose_rate"].data[:, sensor_indices, dosimeter_indices].ravel()
+            * u.rad
+            / u.second
+        )
+        lon = self["lon"].data[:, sensor_indices]
+        lat = self["lat"].data[:, sensor_indices]
+        ts["longitude"] = lon.ravel() * u.deg
+        ts["latitude"] = lat.ravel() * u.deg
+        ts["altitude"] = self["alt"].data[:, sensor_indices].ravel() * u.km
+
+        contour_paths = load_region_contours()
+        ts["region_code"] = points_to_region_code(
+            lon=lon.ravel(), lat=lat.ravel(), paths_dict=contour_paths
+        )
+
+        return ts
+
+    def to_region_indices(
+        self,
+        flavor: Flavor,
+        integration_time: u.Quantity,
+        statistic: str = "median",
+    ) -> TimeSeries:
+        """Aggregate region-indexed measurements into fixed time windows.
+
+        Parameters
+        ----------
+        flavor : `~swxsoc_reach.util.Flavor`
+            Flavor of the dosimeters to aggregate.
+        integration_time : `~astropy.units.Quantity`
+            Positive duration of each aggregation window.
+        statistic : str, optional
+            Statistic applied to all finite dose-rate measurements within each
+            region and time window. Supported values are ``"sum"``,
+            ``"mean"``, ``"median"``, ``"count"``, ``"min"``, ``"max"``,
+            and ``"std"``. Default is ``"median"``.
+
+        Returns
+        -------
+        `~astropy.timeseries.TimeSeries`
+            A time series with one column named ``region_code_<code>`` for
+            every region code present in the track.
+        """
+        measurements = self.to_tracks(flavor=flavor)
+        valid_statistics = {
+            "sum": np.sum,
+            "mean": np.mean,
+            "median": np.median,
+            "count": None,
+            "min": np.min,
+            "max": np.max,
+            "std": np.std,
+        }
+        if statistic not in valid_statistics:
+            raise ValueError(
+                f"Unsupported statistic {statistic!r}. "
+                f"Choose from: {', '.join(valid_statistics)}."
+            )
+        if not integration_time.unit.is_equivalent(u.s):
+            raise u.UnitConversionError("integration_time must have time units.")
+
+        integration_time = integration_time.to(u.s)
+        if integration_time <= 0 * u.s:
+            raise ValueError("integration_time must be positive.")
+        if len(measurements) == 0:
+            raise ValueError("track must contain at least one measurement.")
+
+        times = Time(measurements.time)
+        time_offsets = (times - times[0]).to_value(u.s)
+        bin_indices = np.floor(time_offsets / integration_time.value).astype(int)
+        n_bins = bin_indices.max() + 1
+        ts = TimeSeries(
+            time=times[0] + np.arange(n_bins) * integration_time,
+        )
+
+        region_codes = np.asarray(measurements["region_code"], dtype=float)
+        dose_rates = measurements["dose_rate"].to_value(u.rad / u.s)
+        valid_regions = np.isfinite(region_codes)
+        for region_code in np.unique(region_codes[valid_regions]).astype(int):
+            values = np.full(n_bins, np.nan)
+            region_mask = valid_regions & (region_codes == region_code)
+            for bin_index in range(n_bins):
+                measurements = dose_rates[region_mask & (bin_indices == bin_index)]
+                measurements = measurements[np.isfinite(measurements)]
+                if statistic == "count":
+                    values[bin_index] = len(measurements)
+                elif measurements.size:
+                    values[bin_index] = valid_statistics[statistic](measurements)
+
+            unit = u.count if statistic == "count" else u.rad / u.s
+            ts[f"region_code_{region_code}"] = values * unit
+
+        ts.meta["statistic"] = statistic
+        ts.meta["integration_time"] = str(integration_time)
+        ts.meta["flavor"] = flavor.name
+        return ts
+
     def get_track(self, reach_id: SensorId | int) -> TimeSeries:
         """
         Retrieve a time series of tracking data for a specific sensor.
