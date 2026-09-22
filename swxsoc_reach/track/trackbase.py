@@ -47,6 +47,21 @@ class REACHTrack(SWXData):
     It provides methods for extracting individual tracks, plotting the track parameters as a function of time, plotting the track on a global geomap, and converting the track to a gridded geospatial map.
     """
 
+    @staticmethod
+    def _finite_measurement_mask(
+        dose_rate: np.ndarray,
+        lon: np.ndarray,
+        lat: np.ndarray,
+        alt: np.ndarray,
+    ) -> np.ndarray:
+        """Return the finite-data mask for one or more dosimeter measurements."""
+        geolocation_mask = np.isfinite(lon) & np.isfinite(lat) & np.isfinite(alt)
+        if dose_rate.ndim == 1:
+            return np.isfinite(dose_rate) & geolocation_mask
+        if geolocation_mask.ndim == 1:
+            geolocation_mask = geolocation_mask[:, np.newaxis]
+        return np.isfinite(dose_rate) & geolocation_mask
+
     def __add__(self, other: "REACHTrack") -> "REACHTrack":
         """Concatenate two tracks along their observation-time axis.
 
@@ -138,7 +153,12 @@ class REACHTrack(SWXData):
         -------
         TimeSeries
             A time series containing the sensor ID, flavor, dose rate,
-            coordinates, and region code for every selected measurement.
+            coordinates, direction of travel, and region code for every
+            selected finite measurement. Direction is ``"north"`` when
+            latitude increases and ``"south"`` when it decreases. Rows with
+            non-finite dose rates or geolocation values are discarded before
+            direction is determined. A zero latitude gradient is classified as
+            ``"north"``.
 
         Raises
         ------
@@ -159,11 +179,6 @@ class REACHTrack(SWXData):
             raise ValueError(f"No dosimeters match flavor {flavor.name}.")
 
         n_measurements = sensor_indices.size
-        ts_times = np.repeat(Time(self["time"]), n_measurements)
-        ts = TimeSeries(time=ts_times)
-        ts["sensor_id"] = np.tile(
-            self["sensor_ids"].data[sensor_indices], len(self.time)
-        )
         selected_flavors = np.asarray(
             [
                 selected_flavor.name
@@ -171,22 +186,39 @@ class REACHTrack(SWXData):
             ],
             dtype="U1",
         )
-        ts["flavor"] = np.tile(selected_flavors, len(self.time))
-        ts["dose_rate"] = (
-            self["dose_rate"].data[:, sensor_indices, dosimeter_indices].ravel()
-            * u.rad
-            / u.second
-        )
+        dose_rate = self["dose_rate"].data[:, sensor_indices, dosimeter_indices]
         lon = self["lon"].data[:, sensor_indices]
         lat = self["lat"].data[:, sensor_indices]
-        ts["longitude"] = lon.ravel() * u.deg
-        ts["latitude"] = lat.ravel() * u.deg
-        ts["altitude"] = self["alt"].data[:, sensor_indices].ravel() * u.km
+        alt = self["alt"].data[:, sensor_indices]
+        valid_measurements = self._finite_measurement_mask(dose_rate, lon, lat, alt)
+
+        direction = np.empty(lat.shape, dtype="U5")
+        for sensor_index in range(lat.shape[1]):
+            valid = valid_measurements[:, sensor_index]
+            if np.count_nonzero(valid) < 2:
+                valid_measurements[:, sensor_index] = False
+                continue
+            latitude_gradient = np.gradient(lat[valid, sensor_index])
+            direction[valid, sensor_index] = np.where(
+                latitude_gradient >= 0, "north", "south"
+            )
 
         contour_paths = load_region_contours()
-        ts["region_code"] = points_to_region_code(
+        region_code = points_to_region_code(
             lon=lon.ravel(), lat=lat.ravel(), paths_dict=contour_paths
-        )
+        ).reshape(lon.shape)
+        row_mask = valid_measurements.ravel()
+        ts = TimeSeries(time=np.repeat(Time(self["time"]), n_measurements)[row_mask])
+        ts["sensor_id"] = np.tile(
+            self["sensor_ids"].data[sensor_indices], len(self.time)
+        )[row_mask]
+        ts["flavor"] = np.tile(selected_flavors, len(self.time))[row_mask]
+        ts["dose_rate"] = dose_rate.ravel()[row_mask] * u.rad / u.second
+        ts["longitude"] = lon.ravel()[row_mask] * u.deg
+        ts["latitude"] = lat.ravel()[row_mask] * u.deg
+        ts["altitude"] = alt.ravel()[row_mask] * u.km
+        ts["direction"] = direction.ravel()[row_mask]
+        ts["region_code"] = region_code.ravel()[row_mask]
 
         return ts
 
@@ -306,8 +338,16 @@ class REACHTrack(SWXData):
 
         reach_index = sensor_id.to_index()
 
+        dose_rate = self["dose_rate"].data[:, reach_index, :]
+        lon = self["lon"].data[:, reach_index]
+        lat = self["lat"].data[:, reach_index]
+        alt = self["alt"].data[:, reach_index]
+        valid_measurements = self._finite_measurement_mask(
+            dose_rate, lon, lat, alt
+        ).all(axis=1)
+
         # Get the Astropy Time for the TimeSeries
-        ts_times = Time(self["time"])
+        ts_times = Time(self["time"])[valid_measurements]
         ts = TimeSeries(time=ts_times)
 
         flavor_str = []
@@ -317,19 +357,19 @@ class REACHTrack(SWXData):
                 Flavor.from_str(self["dosimeter_flavors"].data[reach_index][dose_index])
             )
             ts[f"dose{dose_index}"] = (
-                self["dose_rate"].data[:, reach_index, dose_index] * u.rad / u.second
+                dose_rate[valid_measurements, dose_index] * u.rad / u.second
             )
 
         # Get Geodetic Coordinates and Region Codes
-        ts["longitude"] = self["lon"].data[:, reach_index] * u.deg
-        ts["latitude"] = self["lat"].data[:, reach_index] * u.deg
-        ts["altitude"] = self["alt"].data[:, reach_index] * u.km
+        ts["longitude"] = lon[valid_measurements] * u.deg
+        ts["latitude"] = lat[valid_measurements] * u.deg
+        ts["altitude"] = alt[valid_measurements] * u.km
 
         # Define Region Codes based on lon/lat coordinates using the saved contour paths
         contour_paths = load_region_contours()
         ts["region_code"] = points_to_region_code(
-            lon=self["lon"].data[:, reach_index],
-            lat=self["lat"].data[:, reach_index],
+            lon=lon[valid_measurements],
+            lat=lat[valid_measurements],
             paths_dict=contour_paths,
         )
 

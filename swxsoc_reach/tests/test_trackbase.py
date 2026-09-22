@@ -55,7 +55,18 @@ def test_to_tracks_filters_all_sensors_by_flavor(reach_track_swx):
     )
     sensor_indices, dosimeter_indices = np.nonzero(flavor_grid == Flavor.X)
 
-    expected_measurements = len(reach_track_swx.time) * len(sensor_indices)
+    dose_rate = reach_track_swx["dose_rate"].data[:, sensor_indices, dosimeter_indices]
+    longitude = reach_track_swx["lon"].data[:, sensor_indices]
+    latitude = reach_track_swx["lat"].data[:, sensor_indices]
+    altitude = reach_track_swx["alt"].data[:, sensor_indices]
+    valid_measurements = (
+        np.isfinite(dose_rate)
+        & np.isfinite(longitude)
+        & np.isfinite(latitude)
+        & np.isfinite(altitude)
+    )
+    valid_measurements &= np.count_nonzero(valid_measurements, axis=0) >= 2
+    expected_measurements = np.count_nonzero(valid_measurements)
     assert len(tracks.time) == expected_measurements
     assert tracks["dose_rate"].shape == (expected_measurements,)
     assert (
@@ -63,7 +74,7 @@ def test_to_tracks_filters_all_sensors_by_flavor(reach_track_swx):
         == np.tile(
             reach_track_swx["sensor_ids"].data[sensor_indices],
             len(reach_track_swx.time),
-        ).tolist()
+        )[valid_measurements.ravel()].tolist()
     )
     assert (
         tracks["flavor"].tolist()
@@ -73,9 +84,12 @@ def test_to_tracks_filters_all_sensors_by_flavor(reach_track_swx):
                 for selected_flavor in flavor_grid[sensor_indices, dosimeter_indices]
             ],
             len(reach_track_swx.time),
-        ).tolist()
+        )[valid_measurements.ravel()].tolist()
     )
     assert "region_code" in tracks.colnames
+    assert "direction" in tracks.colnames
+    assert set(tracks["direction"]) <= {"north", "south"}
+    assert set(tracks["direction"]) == {"north", "south"}
 
 
 def test_to_region_indices_aggregates_each_region(reach_track_swx):
@@ -265,6 +279,21 @@ def test_timeseries_has_region_code_column(reach_track_swx):
     ts = reach_track_swx.get_track(reach_id=SensorId.from_str(0))
     assert "region_code" in ts.colnames
     assert len(ts["region_code"]) == len(ts.time)
+
+
+def test_get_track_filters_nonfinite_measurements(reach_track_swx):
+    reach_index = SensorId.from_str(0).to_index()
+    reach_track_swx["dose_rate"].data[0, reach_index, 0] = np.nan
+    reach_track_swx["lat"].data[1, reach_index] = np.nan
+
+    ts = reach_track_swx.get_track(reach_id=SensorId.from_str(0))
+
+    assert len(ts) == len(reach_track_swx.time) - 2
+    assert np.isfinite(ts["dose0"].value).all()
+    assert np.isfinite(ts["dose1"].value).all()
+    assert np.isfinite(ts["longitude"].value).all()
+    assert np.isfinite(ts["latitude"].value).all()
+    assert np.isfinite(ts["altitude"].value).all()
 
 
 @pytest.fixture
