@@ -46,7 +46,7 @@ Each REACH spacecraft carries two channels selected from six flavors.
      - >= 2.20 MeV electrons; >= 43.9 MeV protons
      - 7
    * - W
-     - >=1.43 MeV electrons, >= 10.5 MeV protons
+     - >= 10.5 MeV protons
      - 14
    * - X
      - >= 0.798 keV electrons; >= 12.1 MeV protons
