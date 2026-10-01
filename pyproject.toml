@@ -35,6 +35,7 @@ dependencies = [
   'scipy',
   'matplotlib',
   'pandas',
+  'ndcube>=2.2.0',
   'swxsoc[cdf] @ git+https://github.com/swxsoc/swxsoc.git@main',
 ]
 
