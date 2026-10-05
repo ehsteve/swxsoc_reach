@@ -30,6 +30,7 @@ classifiers = [
 ]
 dependencies = [
   'astropy',
+  'spherical-geometry',
   'cartopy',
   'numpy',
   'scipy',
